@@ -17,6 +17,33 @@ layer only assembles the self-describing container.
   decompresses **5–25 % faster** than zstd at the equivalent ratio.
 - **MIT licensed**, depends only on libzstd and libpthread.
 
+## Conclusions
+
+OmniComp is ready to publish as an MIT open-source compressor with clear scope.
+
+- **What it does best**: decompression-first workloads, numeric/structured
+  binary data, and high-compression tiers where zstd levels 9..22 become
+  expensive.
+- **What the results show**:
+  - On full Silesia at equal levels (1..22), OmniComp is usually within
+    ~1-3% ratio of zstd while often decompressing faster.
+  - Best decompression gains on Silesia occur around levels 11-19, with
+    measured wins up to about +39% vs zstd at the same level.
+  - On numeric-heavy inputs (for example `x-ray`), OmniComp can beat zstd on
+    both ratio and decompression speed.
+  - On very fast generic settings (`level` 1-2), zstd remains stronger for
+    pure compression throughput.
+- **Practical recommendation**:
+  - If your main KPI is fastest generic compression: use plain zstd.
+  - If your KPI is decompression speed with strong ratio: use OmniComp
+    levels 9-19.
+  - If your data is numeric/scientific and repeatedly read: OmniComp is a
+    strong default choice.
+
+All claims above are backed by reproducible artifacts committed in `docs/`
+(`validation_report.*`, `level_sweep*.csv`, `level_sweep*.md`) and by
+executable test/benchmark scripts in `tests/` and `examples/`.
+
 ## Headline result — Silesia (202 MB), single thread
 
 | Algorithm | Ratio | Comp MB/s | Decomp MB/s | vs zstd                          |
@@ -215,6 +242,7 @@ The shared library lands at `omnicomp/libomnicomp_pipeline.{so,dylib}`.
 ```bash
 make
 python3 tests/test_roundtrip.py     # 15 round-trip tests
+python3 tests/test_validation_matrix.py  # system validation tests
 # or
 pytest tests/ -v
 ```
@@ -223,6 +251,39 @@ pytest tests/ -v
 plus boundary sizes (empty, 1 byte, sub-block, multi-block) and a
 stress sweep of random binaries. Every test verifies bit-exact
 round-trip (`compress → decompress → original`).
+
+For a full project validation matrix (performance + systems behavior),
+run:
+
+```bash
+python3 examples/validation_matrix.py --level 9 --threads 8 \
+  --silesia-dir /tmp/silesia \
+  --real-dataset-dir /path/to/real_dataset \
+  --output docs/validation_report.md \
+  --csv-output docs/validation_report.csv
+```
+
+This matrix explicitly tests and documents:
+
+- multiple corpus
+- memory used
+- real dataset
+- multithreading
+- small files
+- incompressible data
+- streaming (chunked frames)
+- latency (p50/p95)
+
+See `docs/TESTING.md` for the release gate checklist.
+
+Latest executed validation artifacts:
+
+- `docs/validation_report.md` (generated from `examples/validation_matrix.py`)
+- `docs/validation_report.csv` (machine-readable metrics for OmniComp/zstd/lz4)
+- `docs/level_sweep.csv` (OmniComp 1..22 vs zstd 1..22, same conditions)
+- `docs/level_sweep_xray.csv` (numeric-heavy `x-ray` sweep)
+- `docs/level_sweep_mixed.csv` (mixed corpus sweep)
+- `tests/test_validation_matrix.py` (pass/fail system checks for the same matrix)
 
 ## Reproducing the Silesia numbers
 
@@ -274,12 +335,24 @@ zstd" without depending on the dispatcher's choice.
 │   ├── pipeline.c              # full pipeline: detect + dispatch + threading
 │   └── detector.c              # standalone reference detector
 ├── tests/
-│   └── test_roundtrip.py       # per-niche round-trip checks
+│   ├── test_roundtrip.py          # per-niche round-trip checks
+│   └── test_validation_matrix.py  # system validation checks
 ├── examples/
-│   ├── benchmark.py            # quick ratio + throughput benchmark
-│   └── benchmark_silesia.py    # reproducible Silesia comparison
+│   ├── benchmark.py              # quick ratio + throughput benchmark
+│   ├── benchmark_silesia.py      # reproducible Silesia comparison
+│   ├── validation_matrix.py      # full validation matrix + CSV/MD export
+│   └── level_sweep.py            # OmniComp vs zstd level 1..22 sweep
 └── docs/
-    └── paper.docx              # research paper (English)
+    ├── paper.docx               # research paper (English + addenda)
+    ├── TESTING.md               # release gate and validation workflow
+    ├── validation_report.md     # latest validation matrix report
+    ├── validation_report.csv    # machine-readable matrix report
+    ├── level_sweep.md           # Silesia 1..22 sweep summary
+    ├── level_sweep.csv          # Silesia 1..22 sweep raw metrics
+    ├── level_sweep_xray.md      # numeric-heavy sweep summary
+    ├── level_sweep_xray.csv     # numeric-heavy sweep raw metrics
+    ├── level_sweep_mixed.md     # mixed workload sweep summary
+    └── level_sweep_mixed.csv    # mixed workload sweep raw metrics
 ```
 
 ## Changelog
