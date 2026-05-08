@@ -1,0 +1,32 @@
+# Compiled native libraries
+*.so
+*.dylib
+*.dll
+*.o
+*.obj
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.tox/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local benchmark output
+benchmark_results/
+*.log
