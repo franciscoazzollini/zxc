@@ -41,8 +41,8 @@ OmniComp is ready to publish as an MIT open-source compressor with clear scope.
     strong default choice.
 
 All claims above are backed by reproducible artifacts committed in `docs/`
-(`validation_report.*`, `level_sweep*.csv`, `level_sweep*.md`) and by
-executable test/benchmark scripts in `tests/` and `examples/`.
+(`validation_report.*`, `silesia_vs_zstd_metrics.csv`, `silesia_per_file.csv`)
+and by executable test/benchmark scripts in `tests/` and `examples/`.
 
 ## Headline result — Silesia (202 MB), single thread
 
@@ -280,9 +280,8 @@ Latest executed validation artifacts:
 
 - `docs/validation_report.md` (generated from `examples/validation_matrix.py`)
 - `docs/validation_report.csv` (machine-readable metrics for OmniComp/zstd/lz4)
-- `docs/level_sweep.csv` (OmniComp 1..22 vs zstd 1..22, same conditions)
-- `docs/level_sweep_xray.csv` (numeric-heavy `x-ray` sweep)
-- `docs/level_sweep_mixed.csv` (mixed corpus sweep)
+- `docs/silesia_vs_zstd_metrics.csv` (Silesia blob: zstd vs OmniComp, selected levels)
+- `docs/silesia_per_file.csv` (per-file Silesia + blob, same comparison)
 - `tests/test_validation_matrix.py` (pass/fail system checks for the same matrix)
 
 ## Reproducing the Silesia numbers
@@ -291,18 +290,18 @@ Latest executed validation artifacts:
 # Get the corpus (one-off)
 mkdir -p /tmp/silesia && cd /tmp/silesia
 for f in dickens mozilla mr nci ooffice osdb reymont samba sao webster x-ray xml; do
-    curl -fsSL -o $f.zip https://github.com/MiloszKrajewski/SilesiaCorpus/raw/master/$f.zip
-    unzip -q -o $f.zip
+    curl -fsSL -o $f.bz2 "https://sun.aei.polsl.pl/~sdeor/corpus/$f.bz2"
+    bzip2 -d -f $f.bz2
 done
 
 # Run the benchmark
 cd /path/to/zxc
-python3 examples/benchmark_silesia.py --threads 1 \
-        --algos "zstd -1,zstd -3,zstd -9,zstd -15,zstd -22,OmniComp L3,OmniComp L9,OmniComp L12,OmniComp L22"
+python3 examples/benchmark_silesia.py --silesia-dir /tmp/silesia
 ```
 
-You will need `pip install zstandard` for the zstd reference. Per-file
-results plus the concatenated 202 MB blob are reported.
+You will need `pip install zstandard` for the zstd reference. The script writes
+`docs/silesia_vs_zstd_metrics.csv` (blob) and `docs/silesia_per_file.csv`
+(per-file plus blob), including ratio / throughput deltas and RSS deltas.
 
 ## Container format
 
@@ -341,18 +340,14 @@ zstd" without depending on the dispatcher's choice.
 │   ├── benchmark.py              # quick ratio + throughput benchmark
 │   ├── benchmark_silesia.py      # reproducible Silesia comparison
 │   ├── validation_matrix.py      # full validation matrix + CSV/MD export
-│   └── level_sweep.py            # OmniComp vs zstd level 1..22 sweep
+│   └── level_sweep.py            # optional: OmniComp vs zstd level 1..22 sweep
 └── docs/
     ├── paper.docx               # research paper (English + addenda)
     ├── TESTING.md               # release gate and validation workflow
     ├── validation_report.md     # latest validation matrix report
     ├── validation_report.csv    # machine-readable matrix report
-    ├── level_sweep.md           # Silesia 1..22 sweep summary
-    ├── level_sweep.csv          # Silesia 1..22 sweep raw metrics
-    ├── level_sweep_xray.md      # numeric-heavy sweep summary
-    ├── level_sweep_xray.csv     # numeric-heavy sweep raw metrics
-    ├── level_sweep_mixed.md     # mixed workload sweep summary
-    └── level_sweep_mixed.csv    # mixed workload sweep raw metrics
+    ├── silesia_vs_zstd_metrics.csv  # Silesia blob vs zstd (selected levels)
+    └── silesia_per_file.csv       # per-file Silesia + blob vs zstd
 ```
 
 ## Changelog

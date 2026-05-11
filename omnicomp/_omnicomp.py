@@ -81,8 +81,11 @@ def _adaptive_block_size(n: int) -> int:
         return 1024 * 1024
     elif n < 32 * 1024 * 1024:
         return 4 * 1024 * 1024
-    else:
+    elif n < 128 * 1024 * 1024:
         return 8 * 1024 * 1024
+    # Very large inputs (Silesia-scale or bigger) benefit from larger blocks:
+    # zstd gets more context and header overhead is further amortized.
+    return 16 * 1024 * 1024
 
 
 def omni_compress_v8_turbo(data: bytes, n_threads: int = 0,

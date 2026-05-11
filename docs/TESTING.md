@@ -43,6 +43,6 @@ Recommended release gate:
 
 1. `python3 tests/test_roundtrip.py`
 2. `python3 tests/test_validation_matrix.py`
-3. `python3 examples/benchmark_silesia.py --threads 1`
+3. `python3 examples/benchmark_silesia.py` (writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv`)
 4. `python3 examples/validation_matrix.py --level 9 --threads 8`
 5. Save the generated report and add a short note to the paper addendum.
