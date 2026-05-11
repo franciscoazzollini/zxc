@@ -43,6 +43,6 @@ Recommended release gate:
 
 1. `python3 tests/test_roundtrip.py`
 2. `python3 tests/test_validation_matrix.py`
-3. `python3 examples/benchmark_silesia.py` (writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv`)
+3. `python3 examples/benchmark_silesia.py` (writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv`; columns include `n_threads`, wall times `comp_*_s` / `decomp_*_s` (seconds, best-of-repeats), MB/s, deltas, and RSS peak delta per run — see script docstring). Multi-thread: `python3 examples/benchmark_silesia.py --threads 8` writes `docs/silesia_vs_zstd_metrics_8t.csv` and `docs/silesia_per_file_8t.csv`.
 4. `python3 examples/validation_matrix.py --level 9 --threads 8`
 5. Save the generated report and add a short note to the paper addendum.

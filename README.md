@@ -280,8 +280,9 @@ Latest executed validation artifacts:
 
 - `docs/validation_report.md` (generated from `examples/validation_matrix.py`)
 - `docs/validation_report.csv` (machine-readable metrics for OmniComp/zstd/lz4)
-- `docs/silesia_vs_zstd_metrics.csv` (Silesia blob: zstd vs OmniComp, selected levels)
+- `docs/silesia_vs_zstd_metrics.csv` (Silesia blob: zstd vs OmniComp, selected levels, `n_threads=1`)
 - `docs/silesia_per_file.csv` (per-file Silesia + blob, same comparison)
+- `docs/silesia_vs_zstd_metrics_8t.csv` / `docs/silesia_per_file_8t.csv` (same, with 8 compression threads)
 - `tests/test_validation_matrix.py` (pass/fail system checks for the same matrix)
 
 ## Reproducing the Silesia numbers

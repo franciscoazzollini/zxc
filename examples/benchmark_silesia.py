@@ -4,14 +4,28 @@ Writes two CSV files (default paths under docs/):
 
   docs/silesia_vs_zstd_metrics.csv
     One row per level on the full Silesia blob (concatenated files).
-    Columns include ratio / decompression speed for zstd and OmniComp,
-    percentage deltas, and peak RSS growth during the run (child process).
+    Columns include ratio, wall times (seconds, best-of-``--repeats``) for
+    compress/decompress each side, derived MB/s, percentage deltas, and RSS.
 
   docs/silesia_per_file.csv
     One row per (dataset, level) for each corpus file plus the blob.
     Same metrics and deltas as above.
 
+  RSS columns (each benchmark runs in a fresh ``spawn`` child process):
+    ``rss_peak_delta_*_mb`` is ``ru_maxrss`` after the compress+decompress
+    work minus ``ru_maxrss`` before (macOS: ``ru_maxrss`` treated as bytes;
+    Linux: kilobytes per ``getrusage``). It is an approximate **peak resident
+    set growth** attributable to that run, not a full allocator profile.
+    ``rss_delta_diff_omni_minus_zstd_mb`` is Omni minus zstd for the same row.
+
 Levels default: 1, 3, 9, 12, 15, 22 (same numeric level for zstd and OmniComp).
+
+Threading:
+  ``--threads N`` (default 1): zstd compression uses ``N`` worker threads when ``N>1``;
+  OmniComp uses ``n_threads=N`` for block-parallel compression. Decompression stays
+  single-threaded for both (lib / binding limits). With default CSV paths and
+  ``N>1``, outputs are written as ``docs/silesia_vs_zstd_metrics_<N>t.csv`` and
+  ``docs/silesia_per_file_<N>t.csv`` so single-thread baselines are preserved.
 
 Download the corpus once with:
     mkdir -p /tmp/silesia && cd /tmp/silesia
@@ -48,7 +62,15 @@ def mb(n: int) -> float:
     return n / (1024.0 * 1024.0)
 
 
-def _child_bench(conn, kind: str, level: int, sdir: str, dataset: str, repeats: int) -> None:
+def _child_bench(
+    conn,
+    kind: str,
+    level: int,
+    sdir: str,
+    dataset: str,
+    repeats: int,
+    threads: int,
+) -> None:
     """Run in a fresh process: load data from disk, bench, send one dict."""
     import resource
     import time as time_mod
@@ -79,13 +101,19 @@ def _child_bench(conn, kind: str, level: int, sdir: str, dataset: str, repeats: 
     n = len(data)
     size_mb = mb(n)
 
+    z_threads = 0 if threads <= 1 else threads
+    o_threads = max(1, threads)
+
     if kind == "zstd":
-        cctx = zstd.ZstdCompressor(level=level, threads=0)
+        cctx = zstd.ZstdCompressor(level=level, threads=z_threads)
         dctx = zstd.ZstdDecompressor()
         comp, t_c = run_best(lambda: cctx.compress(data), repeats)
         back, t_d = run_best(lambda: dctx.decompress(comp), repeats)
     else:
-        comp, t_c = run_best(lambda: omni_compress(data, level=level, n_threads=1), repeats)
+        comp, t_c = run_best(
+            lambda: omni_compress(data, level=level, n_threads=o_threads),
+            repeats,
+        )
         back, t_d = run_best(lambda: omni_decompress(comp), repeats)
 
     r1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -101,21 +129,31 @@ def _child_bench(conn, kind: str, level: int, sdir: str, dataset: str, repeats: 
     ratio = n / max(1, len(comp))
     out = {
         "ratio": ratio,
+        "comp_s": t_c,
+        "decomp_s": t_d,
         "comp_mb_s": size_mb / t_c,
         "decomp_mb_s": size_mb / t_d,
         "rss_peak_delta_mb": rss_peak_delta_mb,
         "status": "OK" if ok else "FAIL",
+        "n_threads": threads,
     }
     conn.send(out)
     conn.close()
 
 
-def bench_isolated(kind: str, level: int, sdir: Path, dataset: str, repeats: int) -> dict:
+def bench_isolated(
+    kind: str,
+    level: int,
+    sdir: Path,
+    dataset: str,
+    repeats: int,
+    threads: int,
+) -> dict:
     ctx = mp.get_context("spawn")
     parent, child = mp.Pipe(duplex=False)
     p = ctx.Process(
         target=_child_bench,
-        args=(child, kind, level, str(sdir), dataset, repeats),
+        args=(child, kind, level, str(sdir), dataset, repeats, threads),
     )
     p.start()
     p.join(timeout=3600)
@@ -123,18 +161,24 @@ def bench_isolated(kind: str, level: int, sdir: Path, dataset: str, repeats: int
         p.kill()
         return {
             "ratio": float("nan"),
+            "comp_s": float("nan"),
+            "decomp_s": float("nan"),
             "comp_mb_s": float("nan"),
             "decomp_mb_s": float("nan"),
             "rss_peak_delta_mb": float("nan"),
             "status": f"ERROR exit={p.exitcode}",
+            "n_threads": threads,
         }
     if not parent.poll(0.1):
         return {
             "ratio": float("nan"),
+            "comp_s": float("nan"),
+            "decomp_s": float("nan"),
             "comp_mb_s": float("nan"),
             "decomp_mb_s": float("nan"),
             "rss_peak_delta_mb": float("nan"),
             "status": "ERROR no result",
+            "n_threads": threads,
         }
     return parent.recv()
 
@@ -145,19 +189,26 @@ def pct_delta(omni: float, zstd_v: float) -> float:
     return (omni / zstd_v - 1.0) * 100.0
 
 
-def row_blob(level: int, sdir: Path, repeats: int) -> dict:
-    z = bench_isolated("zstd", level, sdir, "__blob__", repeats)
-    o = bench_isolated("omni", level, sdir, "__blob__", repeats)
+def row_blob(level: int, sdir: Path, repeats: int, threads: int) -> dict:
+    z = bench_isolated("zstd", level, sdir, "__blob__", repeats, threads)
+    o = bench_isolated("omni", level, sdir, "__blob__", repeats, threads)
     size_mb = mb(
         sum((sdir / f).stat().st_size for f in SILESIA_FILES if (sdir / f).exists())
     )
     return {
+        "n_threads": threads,
         "level": level,
         "dataset": "silesia_blob",
         "size_mb": size_mb,
         "ratio_zstd": z["ratio"],
         "ratio_omni": o["ratio"],
         "ratio_delta_pct_omni_vs_zstd": pct_delta(o["ratio"], z["ratio"]),
+        "comp_zstd_s": z["comp_s"],
+        "comp_omni_s": o["comp_s"],
+        "comp_time_delta_pct_omni_vs_zstd": pct_delta(o["comp_s"], z["comp_s"]),
+        "decomp_zstd_s": z["decomp_s"],
+        "decomp_omni_s": o["decomp_s"],
+        "decomp_time_delta_pct_omni_vs_zstd": pct_delta(o["decomp_s"], z["decomp_s"]),
         "decomp_zstd_mb_s": z["decomp_mb_s"],
         "decomp_omni_mb_s": o["decomp_mb_s"],
         "decomp_delta_pct_omni_vs_zstd": pct_delta(o["decomp_mb_s"], z["decomp_mb_s"]),
@@ -172,18 +223,25 @@ def row_blob(level: int, sdir: Path, repeats: int) -> dict:
     }
 
 
-def row_per_file(level: int, sdir: Path, dataset: str, repeats: int) -> dict:
-    z = bench_isolated("zstd", level, sdir, dataset, repeats)
-    o = bench_isolated("omni", level, sdir, dataset, repeats)
+def row_per_file(level: int, sdir: Path, dataset: str, repeats: int, threads: int) -> dict:
+    z = bench_isolated("zstd", level, sdir, dataset, repeats, threads)
+    o = bench_isolated("omni", level, sdir, dataset, repeats, threads)
     p = sdir / dataset
     size_mb = mb(p.stat().st_size) if p.exists() else 0.0
     return {
+        "n_threads": threads,
         "level": level,
         "dataset": dataset,
         "size_mb": size_mb,
         "ratio_zstd": z["ratio"],
         "ratio_omni": o["ratio"],
         "ratio_delta_pct_omni_vs_zstd": pct_delta(o["ratio"], z["ratio"]),
+        "comp_zstd_s": z["comp_s"],
+        "comp_omni_s": o["comp_s"],
+        "comp_time_delta_pct_omni_vs_zstd": pct_delta(o["comp_s"], z["comp_s"]),
+        "decomp_zstd_s": z["decomp_s"],
+        "decomp_omni_s": o["decomp_s"],
+        "decomp_time_delta_pct_omni_vs_zstd": pct_delta(o["decomp_s"], z["decomp_s"]),
         "decomp_zstd_mb_s": z["decomp_mb_s"],
         "decomp_omni_mb_s": o["decomp_mb_s"],
         "decomp_delta_pct_omni_vs_zstd": pct_delta(o["decomp_mb_s"], z["decomp_mb_s"]),
@@ -199,12 +257,19 @@ def row_per_file(level: int, sdir: Path, dataset: str, repeats: int) -> dict:
 
 
 BLOB_FIELDS = [
+    "n_threads",
     "level",
     "dataset",
     "size_mb",
     "ratio_zstd",
     "ratio_omni",
     "ratio_delta_pct_omni_vs_zstd",
+    "comp_zstd_s",
+    "comp_omni_s",
+    "comp_time_delta_pct_omni_vs_zstd",
+    "decomp_zstd_s",
+    "decomp_omni_s",
+    "decomp_time_delta_pct_omni_vs_zstd",
     "decomp_zstd_mb_s",
     "decomp_omni_mb_s",
     "decomp_delta_pct_omni_vs_zstd",
@@ -228,7 +293,9 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
             line = {}
             for k in fieldnames:
                 v = r[k]
-                if isinstance(v, float):
+                if isinstance(v, int) and k == "n_threads":
+                    line[k] = str(v)
+                elif isinstance(v, float):
                     line[k] = f"{v:.6f}" if v == v else ""
                 else:
                     line[k] = v
@@ -242,8 +309,14 @@ def main():
                     help="comma-separated zstd/OmniComp levels (same number for both)")
     ap.add_argument("--repeats", type=int, default=2,
                     help="best-of-N timing inside each isolated run")
-    ap.add_argument("--blob-csv", default=BLOB_CSV)
-    ap.add_argument("--per-file-csv", default=PER_FILE_CSV)
+    ap.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="zstd compression threads and OmniComp n_threads (>=1).",
+    )
+    ap.add_argument("--blob-csv", default="")
+    ap.add_argument("--per-file-csv", default="")
     ap.add_argument("--no-blob", action="store_true")
     ap.add_argument("--no-per-file", action="store_true")
     args = ap.parse_args()
@@ -258,12 +331,33 @@ def main():
         print("No levels parsed", file=sys.stderr)
         return 1
 
+    threads = max(1, args.threads)
+    if not args.blob_csv:
+        if threads <= 1:
+            args.blob_csv = BLOB_CSV
+        else:
+            args.blob_csv = str(
+                Path(BLOB_CSV).with_name(
+                    f"{Path(BLOB_CSV).stem}_{threads}t.csv"
+                )
+            )
+    if not args.per_file_csv:
+        if threads <= 1:
+            args.per_file_csv = PER_FILE_CSV
+        else:
+            args.per_file_csv = str(
+                Path(PER_FILE_CSV).with_name(
+                    f"{Path(PER_FILE_CSV).stem}_{threads}t.csv"
+                )
+            )
+
     blob_rows: list[dict] = []
     per_rows: list[dict] = []
 
     print(f"OmniComp Silesia benchmark (unified CSV)")
     print(f"  silesia dir : {sdir}")
     print(f"  levels      : {levels}")
+    print(f"  threads     : {threads}")
     print(f"  repeats     : {args.repeats}")
     print(f"  blob CSV    : {args.blob_csv}")
     print(f"  per-file CSV: {args.per_file_csv}")
@@ -274,7 +368,7 @@ def main():
         print("=" * 78)
         for lvl in levels:
             print(f"  level {lvl} ...", flush=True)
-            blob_rows.append(row_blob(lvl, sdir, args.repeats))
+            blob_rows.append(row_blob(lvl, sdir, args.repeats, threads))
             r = blob_rows[-1]
             print(
                 f"    zstd ratio={r['ratio_zstd']:.3f} decomp={r['decomp_zstd_mb_s']:.0f} MB/s | "
@@ -293,7 +387,7 @@ def main():
                 continue
             for lvl in levels:
                 print(f"  {fname} L{lvl} ...", flush=True)
-                per_rows.append(row_per_file(lvl, sdir, fname, args.repeats))
+                per_rows.append(row_per_file(lvl, sdir, fname, args.repeats, threads))
             print(f"  [ok] {fname}")
 
         if not args.no_blob and blob_rows:
