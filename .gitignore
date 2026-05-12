@@ -34,3 +34,6 @@ benchmark_results/
 # Editor / backup
 *.bak
 *.bak-*
+
+# Guía divulgativa en español (local / privada; no subir a GitHub)
+docs/explicacion_algoritmo_omnicomp.md
