@@ -3,6 +3,10 @@
 No Python overhead on the critical path. The only Python code involved in
 compression is the very thin wrapper below that hands raw memory pointers
 to the C pipeline and writes out the container header at the end.
+
+Decompression parses the v8 container once in C (`pipeline_decompress_omn8`)
+so every block is decoded without a per-block Python loop; zstd frames reuse
+a per-thread ZSTD_DCtx for lower setup overhead.
 """
 import ctypes
 import os
@@ -53,6 +57,14 @@ LIB.decompress_with_codec.argtypes = [
 
 LIB.my_zstd_compress_bound.restype = C.c_size_t
 LIB.my_zstd_compress_bound.argtypes = [C.c_size_t]
+
+LIB.pipeline_decompress_omn8.restype = C.c_int
+LIB.pipeline_decompress_omn8.argtypes = [
+    PU8,
+    C.c_size_t,
+    PU8,
+    C.c_size_t,
+]
 
 
 # Mirror of the niche IDs in pipeline.c. Keep in sync.
@@ -181,29 +193,26 @@ def omni_decompress_v8(comp: bytes) -> bytes:
     n_blocks = struct.unpack(">I", comp[8:12])[0]
 
     if total == 0:
+        if n_blocks != 0 or len(comp) != 12:
+            raise RuntimeError("corrupt empty v8 container")
         return b""
 
+    if isinstance(comp, bytearray):
+        comp_buf = comp
+    else:
+        comp_buf = bytearray(comp)
+    U8 = C.c_uint8
     out = bytearray(total)
-    out_arr = (C.c_uint8 * total).from_buffer(out)
-    out_base = C.addressof(out_arr)
-
-    pos = 12
-    out_offset = 0
-    for _ in range(n_blocks):
-        nid = comp[pos]; pos += 1
-        orig, comp_size = struct.unpack(">II", comp[pos:pos + 8]); pos += 8
-        payload = comp[pos:pos + comp_size]; pos += comp_size
-
-        # Decode through C.
-        src_ba = bytearray(payload)
-        src_arr = (C.c_uint8 * len(src_ba)).from_buffer(src_ba)
-        dst_ptr = C.cast(out_base + out_offset, C.POINTER(C.c_uint8))
-
-        written = LIB.decompress_with_codec(src_arr, len(payload), nid,
-                                            dst_ptr, total - out_offset, orig)
-        if written != orig:
-            raise RuntimeError(f"decompress mismatch: {written} != {orig}")
-        out_offset += orig
+    comp_arr = (U8 * len(comp_buf)).from_buffer(comp_buf)
+    out_arr = (U8 * total).from_buffer(out)
+    rc = LIB.pipeline_decompress_omn8(
+        C.cast(comp_arr, PU8),
+        C.c_size_t(len(comp_buf)),
+        C.cast(out_arr, PU8),
+        C.c_size_t(total),
+    )
+    if rc != 0:
+        raise RuntimeError(f"pipeline_decompress_omn8 failed (code {rc})")
     return bytes(out)
 
 

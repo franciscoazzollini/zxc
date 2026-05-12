@@ -1,6 +1,6 @@
 # OmniComp v0.9
 
-**A lossless adaptive multi-niche compressor that fills in the gaps between zstd levels.**
+**A lossless adaptive multi-niche compressor that pushes the practical Pareto frontier beyond plain zstd.**
 
 OmniComp routes each block to a specialised codec (predictor + shuffle for
 floats, byte-shuffle for stride-structured data, RLE for runs, zstd for
@@ -11,10 +11,8 @@ layer only assembles the self-describing container.
 - **Lossless** — bit-exact round-trip verified on all 12 files of the
   [Silesia corpus](https://sun.aei.polsl.pl/~sdeor/index.php?page=silesia)
   plus a per-niche synthetic test suite.
-- **A real Pareto frontier** with several operating points that beat
-  zstd: `level=12` reaches **zstd-15-class ratio at 4.8× the compression
-  speed**; `level=22` is **47 % faster than zstd-22**; every level
-  decompresses **5–25 % faster** than zstd at the equivalent ratio.
+- **Frontier-class trade-offs** — multiple operating points dominate or
+  approach zstd at the same numeric level: e.g. `level=12` reaches **zstd-15-class ratio at ~4.8× the compression speed**; `level=22` cuts compression wall time versus **zstd -22** while staying in the same ratio tier; many corpus rows show **multiplicative decompress throughput gains** versus zstd once decode parity is enforced (see **Publication-grade benchmarks** below—large percentage deltas map to throughput ratios, not hidden CPU scaling).
 - **MIT licensed**, depends only on libzstd and libpthread.
 
 ## Conclusions
@@ -43,6 +41,19 @@ OmniComp is ready to publish as an MIT open-source compressor with clear scope.
 All claims above are backed by reproducible artifacts committed in `docs/`
 (`validation_report.*`, `silesia_vs_zstd_metrics.csv`, `silesia_per_file.csv`)
 and by executable test/benchmark scripts in `tests/` and `examples/`.
+
+## Publication-grade benchmarks
+
+Committed Silesia CSVs (`docs/silesia_per_file.csv`, `docs/silesia_vs_zstd_metrics.csv`) are produced with **`n_threads = 1`** by default and record:
+
+| Column | Meaning |
+|--------|---------|
+| `n_threads` | zstd / OmniComp compression worker count for that row |
+| `omni_seq_block_decode` | **1** ⇔ OmniComp’s OMN8 decoder ran **without** internal pthread parallelism between blocks (fair vs single-threaded **libzstd** decompress) |
+| `decomp_mb_s_ratio_omni_over_zstd` | Omni decompress MB/s ÷ zstd decompress MB/s (e.g. **3.0** ≈ triple zstd throughput) |
+| `decomp_delta_pct_omni_vs_zstd` | `(omni_mb_s / zstd_mb_s − 1) × 100` — so **+200 %** corresponds to **~3×** throughput, not “extra cores” |
+
+For a press-style narrative in English, see **`docs/publication.docx`**. The technical manuscript **`docs/paper.docx`** includes an addendum on benchmark integrity (single-thread decode parity).
 
 ## Headline result — Silesia (202 MB), single thread
 
@@ -200,6 +211,46 @@ Decompression auto-detects the level and codecs used for each block,
 so a stream produced at `level=22` and a stream produced at `level=1`
 both decompress with the same `decompress(comp)` call.
 
+### AArch64 decode path (NEON)
+
+When **all** of the following hold, the decoder may use **ARM NEON** for the
+inverse **4-byte byte-shuffle** (the step that re-interleaves four zstd-expanded
+planes into the original row layout):
+
+1. The library is compiled for AArch64 (`__aarch64__` / `__arm64__`).
+2. A **runtime** check passes: `uname(2).machine` is `aarch64` (typical Linux)
+   or `arm64` (Apple Silicon). This avoids turning on SIMD when the binary and
+   host ABI do not match.
+3. The block uses **k = 4** shuffle (`shuffle_4` / i32-style paths). **k = 8,
+   16, 20** still use the portable scalar tile loop (same output, no `vst8`
+   dependency across toolchains).
+
+**Windows** builds always skip this path (scalar decode only).
+
+**Expectations:** the win is most visible on **shuffle-heavy** numeric blocks.
+The full Silesia blob spends most time in plain zstd, so headline blob
+`decomp MB/s` may only move modestly; quantify on your corpus with
+`examples/benchmark_silesia.py` (per-file rows) before attributing large
+aggregate gains to NEON alone.
+
+**Sizing recent decode-only changes (no A/B vs older OmniComp in CI):**
+
+- **Right-sized shuffle / predictor temp buffers** (`malloc(orig)` instead of
+  `malloc(dst_cap)`): removes pathological **O(rest-of-file)** temporary
+  allocations on shuffle blocks; impact is **large per affected block** but
+  **small on full Silesia** because most bytes decode as plain zstd.
+- **`pipeline_decompress_omn8` + fewer ctypes hops**, and **parallel decode
+  across independent blocks** (pthread batches when there are ≥ 3 blocks, up to
+  `min(16, CPU count)` threads): helps **Mozilla-sized** inputs (~7×8 MiB
+  blocks) where each block is a separate zstd frame; expect the largest **in-process**
+  speedups there, while the isolated `benchmark_silesia.py` child processes
+  already pay spawn overhead so CSV deltas move less.
+- **Reused `ZSTD_DCtx` per thread**: typically **≲ ~3 %** on top of libzstd’s
+  own time for a few big frames per file.
+- **NEON `vst4` for k=4 shuffle inverse** (AArch64 + `uname` gate only): helps
+  only shuffle-4-heavy blocks; expect **≲ a few %** on aggregate Silesia unless
+  you profile shuffle-rich members.
+
 ## When to pick OmniComp over plain zstd
 
 | Workload                                        | Pick                          |
@@ -280,9 +331,8 @@ Latest executed validation artifacts:
 
 - `docs/validation_report.md` (generated from `examples/validation_matrix.py`)
 - `docs/validation_report.csv` (machine-readable metrics for OmniComp/zstd/lz4)
-- `docs/silesia_vs_zstd_metrics.csv` (Silesia blob: zstd vs OmniComp, selected levels, `n_threads=1`)
-- `docs/silesia_per_file.csv` (per-file Silesia + blob, same comparison)
-- `docs/silesia_vs_zstd_metrics_8t.csv` / `docs/silesia_per_file_8t.csv` (same, with 8 compression threads)
+- `docs/silesia_vs_zstd_metrics.csv` (Silesia blob: zstd vs OmniComp, selected levels; default **1** compression thread in committed CSVs)
+- `docs/silesia_per_file.csv` (per-file Silesia + blob, same comparison). Columns include `n_threads`, **`omni_seq_block_decode`**, **`decomp_mb_s_ratio_omni_over_zstd`**, then ratio / MB/s / wall-time deltas vs zstd, RSS, and status.
 - `tests/test_validation_matrix.py` (pass/fail system checks for the same matrix)
 
 ## Reproducing the Silesia numbers
@@ -300,9 +350,7 @@ cd /path/to/zxc
 python3 examples/benchmark_silesia.py --silesia-dir /tmp/silesia
 ```
 
-You will need `pip install zstandard` for the zstd reference. The script writes
-`docs/silesia_vs_zstd_metrics.csv` (blob) and `docs/silesia_per_file.csv`
-(per-file plus blob), including ratio / throughput deltas and RSS deltas.
+You will need `pip install zstandard` for the zstd reference. By default (`--thread-configs 1`) it writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv`. Pass `--thread-configs 1,8` for suffixed `_*_{N}t.csv` outputs without overwriting.
 
 ## Container format
 
@@ -342,13 +390,16 @@ zstd" without depending on the dispatcher's choice.
 │   ├── benchmark_silesia.py      # reproducible Silesia comparison
 │   ├── validation_matrix.py      # full validation matrix + CSV/MD export
 │   └── level_sweep.py            # optional: OmniComp vs zstd level 1..22 sweep
+├── scripts/
+│   └── patch_word_docs.py       # regenerates publication.docx / paper addendum (optional)
 └── docs/
-    ├── paper.docx               # research paper (English + addenda)
+    ├── paper.docx               # research paper (English + benchmark addendum)
+    ├── publication.docx         # news-style breakthrough summary (English)
     ├── TESTING.md               # release gate and validation workflow
     ├── validation_report.md     # latest validation matrix report
     ├── validation_report.csv    # machine-readable matrix report
-    ├── silesia_vs_zstd_metrics.csv  # Silesia blob vs zstd (selected levels)
-    └── silesia_per_file.csv       # per-file Silesia + blob vs zstd
+    ├── silesia_vs_zstd_metrics.csv    # blob metrics (default 1 thread)
+    └── silesia_per_file.csv           # per-file + blob rows
 ```
 
 ## Changelog

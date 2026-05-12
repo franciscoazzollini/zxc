@@ -43,6 +43,14 @@ Recommended release gate:
 
 1. `python3 tests/test_roundtrip.py`
 2. `python3 tests/test_validation_matrix.py`
-3. `python3 examples/benchmark_silesia.py` (writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv`; columns include `n_threads`, wall times `comp_*_s` / `decomp_*_s` (seconds, best-of-repeats), MB/s, deltas, and RSS peak delta per run — see script docstring). Multi-thread: `python3 examples/benchmark_silesia.py --threads 8` writes `docs/silesia_vs_zstd_metrics_8t.csv` and `docs/silesia_per_file_8t.csv`.
+3. `python3 examples/benchmark_silesia.py` (writes `docs/silesia_vs_zstd_metrics.csv` and `docs/silesia_per_file.csv` with default **1** compression thread; leading columns are deltas for ratio, decomp MB/s, and decomp wall time vs zstd — see script docstring). Use `--thread-configs N` or `--threads N` for multi-threaded compression.
 4. `python3 examples/validation_matrix.py --level 9 --threads 8`
 5. Save the generated report and add a short note to the paper addendum.
+
+### AArch64 / NEON (shuffle k=4 decode)
+
+When `libomnicomp_pipeline` is built for AArch64 and `uname -m` reports
+`arm64` or `aarch64`, inverse byte-shuffle for **k = 4** may use NEON (`vst4`)
+after the inner zstd frame. Other strides and non-ARM builds use the scalar
+decoder only (bit-identical). See README **“AArch64 decode path (NEON)”** for
+the runtime gate and when to expect a measurable speedup.

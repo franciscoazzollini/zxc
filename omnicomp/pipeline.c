@@ -22,7 +22,49 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <sys/utsname.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include <zstd.h>
+
+#if defined(__aarch64__) || defined(__arm64__)
+#include <arm_neon.h>
+#endif
+
+/* One ZSTD_DCtx per thread for decode: ZSTD_decompress() allocates/frees
+ * scratch state internally; ZSTD_decompressDCtx() reuses the same workspace
+ * across many small frames (every generic block + inner zstd frames). */
+static size_t zstd_tls_decompress(void *dst, size_t dst_cap,
+                                 const void *src, size_t src_size) {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    _Thread_local static ZSTD_DCtx *tls_dctx;
+#elif defined(__clang__) || defined(__GNUC__)
+    static __thread ZSTD_DCtx *tls_dctx;
+#else
+    static ZSTD_DCtx *tls_dctx;
+#endif
+    if (!tls_dctx) {
+        tls_dctx = ZSTD_createDCtx();
+        if (!tls_dctx)
+            return ZSTD_decompress(dst, dst_cap, src, src_size);
+    }
+    return ZSTD_decompressDCtx(tls_dctx, dst, dst_cap, src, src_size);
+}
+
+/* True only when this binary is AArch64 *and* uname says we run on arm64
+ * hardware (never enables NEON SIMD without that check). */
+static int omnicomp_runtime_aarch64(void) {
+#if defined(_WIN32)
+    return 0;
+#elif defined(__aarch64__) || defined(__arm64__)
+    struct utsname u;
+    if (uname(&u) != 0) return 0;
+    return (strcmp(u.machine, "aarch64") == 0 || strcmp(u.machine, "arm64") == 0);
+#else
+    return 0;
+#endif
+}
 
 /* Niche IDs (kept in sync with the Python wrapper). */
 #define NICHE_GENERIC               0
@@ -309,7 +351,7 @@ static size_t comp_zstd(const uint8_t *src, size_t n, uint8_t *dst, size_t dst_c
     return ZSTD_compress(dst, dst_cap, src, n, level);
 }
 static size_t decomp_zstd(const uint8_t *src, size_t n, uint8_t *dst, size_t dst_cap) {
-    return ZSTD_decompress(dst, dst_cap, src, n);
+    return zstd_tls_decompress(dst, dst_cap, src, n);
 }
 
 /* Self-describing codec output:
@@ -352,19 +394,62 @@ static size_t comp_shuffle(const uint8_t *src, size_t n, uint8_t *dst, size_t ds
     return out + 1;
 }
 
+#if defined(__aarch64__) || defined(__arm64__)
+/* NEON inverse of byte-shuffle for k==4: four planes (length n_elems each) ->
+ * interleaved rows dst[i*4+b]. vst4_u8 writes 8 rows (32 bytes) per step; tail
+ * is scalar. Only used when omnicomp_runtime_aarch64() is true (uname gate). */
+static void shuffle_inv_deinterleave_neon_k4(const uint8_t *tmp, size_t n_elems,
+                                             uint8_t *dst) {
+    const uint8_t *p0 = tmp;
+    const uint8_t *p1 = tmp + n_elems;
+    const uint8_t *p2 = tmp + 2u * n_elems;
+    const uint8_t *p3 = tmp + 3u * n_elems;
+    size_t ii = 0;
+    for (; ii + 8 <= n_elems; ii += 8) {
+        uint8x8x4_t pack;
+        pack.val[0] = vld1_u8(p0 + ii);
+        pack.val[1] = vld1_u8(p1 + ii);
+        pack.val[2] = vld1_u8(p2 + ii);
+        pack.val[3] = vld1_u8(p3 + ii);
+        vst4_u8(dst + ii * 4u, pack);
+    }
+    for (; ii < n_elems; ii++) {
+        dst[ii * 4u + 0] = p0[ii];
+        dst[ii * 4u + 1] = p1[ii];
+        dst[ii * 4u + 2] = p2[ii];
+        dst[ii * 4u + 3] = p3[ii];
+    }
+}
+#endif
+
 static size_t decomp_shuffle(const uint8_t *src, size_t n, uint8_t *dst,
-                              size_t dst_cap, int k) {
+                              size_t dst_cap, int k, size_t orig_size) {
     if (n < 1) return 0;
     if (src[0] == 0x00) {
-        return ZSTD_decompress(dst, dst_cap, src + 1, n - 1);
+        return zstd_tls_decompress(dst, dst_cap, src + 1, n - 1);
     }
-    /* src[0] == 0x01: shuffled payload */
-    uint8_t *tmp = (uint8_t *)malloc(dst_cap);
+    /* src[0] == 0x01: shuffled payload. The ZSTD frame expands to exactly the
+     * original block size (k plane layout). Never allocate dst_cap bytes here:
+     * callers pass remaining output window (often huge); malloc(dst_cap) was
+     * O(file) per block and destroyed decompression throughput. */
+    if (orig_size == 0 || orig_size > dst_cap) return 0;
+    uint8_t *tmp = (uint8_t *)malloc(orig_size);
     if (!tmp) return 0;
-    size_t decomp_size = ZSTD_decompress(tmp, dst_cap, src + 1, n - 1);
+    size_t decomp_size = zstd_tls_decompress(tmp, orig_size, src + 1, n - 1);
     if (ZSTD_isError(decomp_size)) { free(tmp); return 0; }
+    if (decomp_size != orig_size || (decomp_size % (size_t)k) != 0) {
+        free(tmp);
+        return 0;
+    }
     size_t n_elems = decomp_size / k;
-    /* Cache-friendly inverse transpose. */
+#if defined(__aarch64__) || defined(__arm64__)
+    if (omnicomp_runtime_aarch64() && k == 4 && n_elems >= 8) {
+        shuffle_inv_deinterleave_neon_k4(tmp, n_elems, dst);
+        free(tmp);
+        return decomp_size;
+    }
+#endif
+    /* Cache-friendly inverse transpose (scalar; all k including NEON tail cases). */
     enum { TILE = 256 };
     for (size_t ii = 0; ii < n_elems; ii += TILE) {
         size_t end = (ii + TILE > n_elems) ? n_elems : ii + TILE;
@@ -435,17 +520,19 @@ static size_t comp_f64_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst, 
     return out + 1;
 }
 
-static size_t decomp_f64_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst, size_t dst_cap) {
+static size_t decomp_f64_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst,
+                                       size_t dst_cap, size_t orig_size) {
     if (n < 1) return 0;
     if (src[0] == 0x00) {
-        return ZSTD_decompress(dst, dst_cap, src + 1, n - 1);
+        return zstd_tls_decompress(dst, dst_cap, src + 1, n - 1);
     }
-    size_t max_mid = ZSTD_getFrameContentSize(src + 1, n - 1);
-    if (max_mid == ZSTD_CONTENTSIZE_ERROR || max_mid == ZSTD_CONTENTSIZE_UNKNOWN) max_mid = dst_cap + 16;
-    uint8_t *tmp = (uint8_t *)malloc(max_mid);
+    /* Middle buffer is exactly orig_size bytes for a valid pred_shuffle block. */
+    if (orig_size < 24 || orig_size > dst_cap || orig_size % 8 != 0) return 0;
+    uint8_t *tmp = (uint8_t *)malloc(orig_size);
     if (!tmp) return 0;
-    size_t mid_size = ZSTD_decompress(tmp, max_mid, src + 1, n - 1);
+    size_t mid_size = zstd_tls_decompress(tmp, orig_size, src + 1, n - 1);
     if (ZSTD_isError(mid_size)) { free(tmp); return 0; }
+    if (mid_size != orig_size) { free(tmp); return 0; }
     memcpy(dst, tmp, 16);
     const uint8_t *res_buf = tmp + 16;
     size_t n_res = (mid_size - 16) / 8;
@@ -492,17 +579,18 @@ static size_t comp_f32_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst, 
     return out + 1;
 }
 
-static size_t decomp_f32_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst, size_t dst_cap) {
+static size_t decomp_f32_pred_shuffle(const uint8_t *src, size_t n, uint8_t *dst,
+                                       size_t dst_cap, size_t orig_size) {
     if (n < 1) return 0;
     if (src[0] == 0x00) {
-        return ZSTD_decompress(dst, dst_cap, src + 1, n - 1);
+        return zstd_tls_decompress(dst, dst_cap, src + 1, n - 1);
     }
-    size_t max_mid = ZSTD_getFrameContentSize(src + 1, n - 1);
-    if (max_mid == ZSTD_CONTENTSIZE_ERROR || max_mid == ZSTD_CONTENTSIZE_UNKNOWN) max_mid = dst_cap + 8;
-    uint8_t *tmp = (uint8_t *)malloc(max_mid);
+    if (orig_size < 12 || orig_size > dst_cap || orig_size % 4 != 0) return 0;
+    uint8_t *tmp = (uint8_t *)malloc(orig_size);
     if (!tmp) return 0;
-    size_t mid_size = ZSTD_decompress(tmp, max_mid, src + 1, n - 1);
+    size_t mid_size = zstd_tls_decompress(tmp, orig_size, src + 1, n - 1);
     if (ZSTD_isError(mid_size)) { free(tmp); return 0; }
+    if (mid_size != orig_size) { free(tmp); return 0; }
     memcpy(dst, tmp, 8);
     const uint8_t *res_buf = tmp + 8;
     size_t n_res = (mid_size - 8) / 4;
@@ -542,7 +630,7 @@ static size_t decomp_rle(const uint8_t *src, size_t n, uint8_t *dst, size_t dst_
         memset(dst, src[1], orig_size);
         return orig_size;
     }
-    return ZSTD_decompress(dst, dst_cap, src + 1, n - 1);
+    return zstd_tls_decompress(dst, dst_cap, src + 1, n - 1);
 }
 
 /* ============ FAST DISPATCH ============ */
@@ -573,14 +661,165 @@ size_t decompress_with_codec(const uint8_t *src, size_t n, int codec_id,
             memcpy(dst, src, n);
             return n;
         case NICHE_CONSTANT: return decomp_rle(src, n, dst, dst_cap, orig_size);
-        case NICHE_SHUFFLE_4:  return decomp_shuffle(src, n, dst, dst_cap, 4);
-        case NICHE_SHUFFLE_8:  return decomp_shuffle(src, n, dst, dst_cap, 8);
-        case NICHE_SHUFFLE_16: return decomp_shuffle(src, n, dst, dst_cap, 16);
-        case NICHE_SHUFFLE_20: return decomp_shuffle(src, n, dst, dst_cap, 20);
-        case NICHE_NUMERIC_F64_PRED_SHUFFLE: return decomp_f64_pred_shuffle(src, n, dst, dst_cap);
-        case NICHE_NUMERIC_F32_PRED_SHUFFLE: return decomp_f32_pred_shuffle(src, n, dst, dst_cap);
+        case NICHE_SHUFFLE_4:  return decomp_shuffle(src, n, dst, dst_cap, 4, orig_size);
+        case NICHE_SHUFFLE_8:  return decomp_shuffle(src, n, dst, dst_cap, 8, orig_size);
+        case NICHE_SHUFFLE_16: return decomp_shuffle(src, n, dst, dst_cap, 16, orig_size);
+        case NICHE_SHUFFLE_20: return decomp_shuffle(src, n, dst, dst_cap, 20, orig_size);
+        case NICHE_NUMERIC_F64_PRED_SHUFFLE:
+            return decomp_f64_pred_shuffle(src, n, dst, dst_cap, orig_size);
+        case NICHE_NUMERIC_F32_PRED_SHUFFLE:
+            return decomp_f32_pred_shuffle(src, n, dst, dst_cap, orig_size);
         default: return decomp_zstd(src, n, dst, dst_cap);
     }
+}
+
+static uint32_t read_u32_be(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+#ifndef _WIN32
+static int omn8_decomp_thread_budget(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > 16) n = 16;
+    return (int)n;
+}
+#else
+static int omn8_decomp_thread_budget(void) { return 4; }
+#endif
+
+typedef struct {
+    const uint8_t *payload;
+    size_t csize;
+    size_t orig;
+    int nid;
+    size_t dst_off;
+} Omn8BlockRec;
+
+typedef struct {
+    Omn8BlockRec *rec;
+    uint8_t *dst_base;
+    volatile int *fail;
+} Omn8DecompThr;
+
+static void *omn8_decomp_worker(void *arg) {
+    Omn8DecompThr *t = (Omn8DecompThr *)arg;
+    Omn8BlockRec *b = t->rec;
+    size_t w = decompress_with_codec(
+        b->payload, b->csize, b->nid,
+        t->dst_base + b->dst_off, b->orig, b->orig);
+    if (w != b->orig)
+        *t->fail = 1;
+    return NULL;
+}
+
+/* Full v8 container decode in one call (matches Python ``omni_decompress_v8``
+ * layout). Parallelises independent blocks across pthreads when there are
+ * enough blocks (Mozilla-scale inputs often split into 6–8 × 8 MiB blocks).
+ * Each thread gets its own ZSTD_DCtx via thread-local storage. */
+int pipeline_decompress_omn8(const uint8_t *comp, size_t comp_len,
+                              uint8_t *dst, size_t dst_cap) {
+    if (comp_len < 12) return -1;
+    if (comp[0] != (uint8_t)'O' || comp[1] != (uint8_t)'M' ||
+        comp[2] != (uint8_t)'N' || comp[3] != (uint8_t)'8')
+        return -2;
+    size_t total = ((size_t)comp[4] << 24) | ((size_t)comp[5] << 16) |
+                   ((size_t)comp[6] << 8) | (size_t)comp[7];
+    uint32_t n_blocks = read_u32_be(comp + 8);
+    if (total > dst_cap) return -4;
+    if (total == 0) {
+        if (n_blocks != 0) return -11;
+        if (comp_len != 12) return -9;
+        return 0;
+    }
+
+    Omn8BlockRec *blocks =
+        (Omn8BlockRec *)malloc((size_t)n_blocks * sizeof(Omn8BlockRec));
+    if (!blocks) return -20;
+
+    size_t pos = 12;
+    size_t out_off = 0;
+    for (uint32_t bi = 0; bi < n_blocks; bi++) {
+        if (pos + 9 > comp_len) {
+            free(blocks);
+            return -5;
+        }
+        int nid = (int)comp[pos++];
+        uint32_t orig = read_u32_be(comp + pos);
+        pos += 4;
+        uint32_t csize = read_u32_be(comp + pos);
+        pos += 4;
+        if ((size_t)csize > comp_len - pos) {
+            free(blocks);
+            return -6;
+        }
+        if (out_off + (size_t)orig > dst_cap) {
+            free(blocks);
+            return -7;
+        }
+        blocks[bi].payload = comp + pos;
+        blocks[bi].csize = (size_t)csize;
+        blocks[bi].orig = (size_t)orig;
+        blocks[bi].nid = nid;
+        blocks[bi].dst_off = out_off;
+        pos += (size_t)csize;
+        out_off += (size_t)orig;
+    }
+    if (pos != comp_len) {
+        free(blocks);
+        return -9;
+    }
+    if (out_off != total) {
+        free(blocks);
+        return -10;
+    }
+
+    volatile int fail = 0;
+    enum { PARALLEL_MIN_BLOCKS = 3 };
+    int maxt = omn8_decomp_thread_budget();
+    /* Benchmark can set OMNICOMP_OMN8_DECOMP_SINGLE_THREAD=1 so decode stays
+     * single-threaded inside one container while Python parallelises across
+     * independent streams (fair vs parallel zstd frames). */
+    const char *st = getenv("OMNICOMP_OMN8_DECOMP_SINGLE_THREAD");
+    int allow_parallel = !(st && st[0] == '1' && st[1] == '\0');
+    if (allow_parallel && (int)n_blocks >= PARALLEL_MIN_BLOCKS && maxt > 1) {
+        uint32_t bi = 0;
+        while (bi < n_blocks && !fail) {
+            int batch = (int)(n_blocks - bi);
+            if (batch > maxt) batch = maxt;
+            pthread_t ths[16];
+            Omn8DecompThr args[16];
+            if (batch > 16) batch = 16;
+            for (int t = 0; t < batch; t++) {
+                args[t].rec = &blocks[(size_t)bi + (size_t)t];
+                args[t].dst_base = dst;
+                args[t].fail = &fail;
+                if (pthread_create(&ths[t], NULL, omn8_decomp_worker, &args[t]) != 0) {
+                    for (int k = 0; k < t; k++) pthread_join(ths[k], NULL);
+                    free(blocks);
+                    return -21;
+                }
+            }
+            for (int t = 0; t < batch; t++) pthread_join(ths[t], NULL);
+            bi += (uint32_t)batch;
+        }
+        free(blocks);
+        return fail ? -8 : 0;
+    }
+
+    for (uint32_t bi = 0; bi < n_blocks; bi++) {
+        Omn8BlockRec *b = &blocks[bi];
+        size_t w = decompress_with_codec(
+            b->payload, b->csize, b->nid,
+            dst + b->dst_off, dst_cap - b->dst_off, b->orig);
+        if (w != b->orig) {
+            free(blocks);
+            return -8;
+        }
+    }
+    free(blocks);
+    return 0;
 }
 
 /* ============ FULL PER-BLOCK PIPELINE: detect+compress ============ */
