@@ -1,5 +1,7 @@
 # OmniComp v0.9
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **A lossless adaptive multi-niche compressor that pushes the practical Pareto frontier beyond plain zstd.**
 
 OmniComp routes each block to a specialised codec (predictor + shuffle for
@@ -377,6 +379,9 @@ zstd" without depending on the dispatcher's choice.
 ├── Makefile                # one-shot library build
 ├── pyproject.toml          # PEP 621 metadata
 ├── README.md
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── NOTICE
 ├── omnicomp/
 │   ├── __init__.py             # public Python API (level knob, etc.)
 │   ├── _omnicomp.py            # ctypes wrapper for the C pipeline
@@ -392,6 +397,9 @@ zstd" without depending on the dispatcher's choice.
 │   └── level_sweep.py            # optional: OmniComp vs zstd level 1..22 sweep
 ├── scripts/
 │   └── patch_word_docs.py       # regenerates publication.docx / paper addendum (optional)
+├── .github/
+│   └── workflows/
+│       └── ci.yml               # GitHub Actions: build + pytest
 └── docs/
     ├── paper.docx               # research paper (English + benchmark addendum)
     ├── publication.docx         # news-style breakthrough summary (English)
@@ -432,16 +440,25 @@ zstd" without depending on the dispatcher's choice.
 ## Licensing
 
 OmniComp is released under the **MIT** license — see [`LICENSE`](LICENSE).
+Third-party runtime dependencies are summarized in [`NOTICE`](NOTICE).
 
 OmniComp depends on the following permissively-licensed components:
 
-- **zstd** (BSD-3, Meta)
+- **zstd** (BSD / GPLv2 dual-licensed at source — see upstream Meta/zstd)
 - **pthreads** (system)
 
 All components allow free composition, including for commercial use.
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run the test suite (`make
-test`) before submitting changes that touch the C pipeline, and keep
-the niche IDs in `pipeline.c`, `detector.c` and `_omnicomp.py` in sync.
+See **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for build steps, testing expectations,
+and metadata (GitHub URLs) to adjust when you fork.
+
+Quick checklist: `make && make test`; keep niche IDs aligned across
+`pipeline.c`, `detector.c`, and `_omnicomp.py`.
+
+Security disclosures: **[`SECURITY.md`](SECURITY.md)**.
+
+Continuous integration runs **`pytest`** on pushes/PRs (see `.github/workflows/ci.yml`).
+After you create the GitHub repository, replace `omnicomp/omnicomp` in
+`pyproject.toml` URLs if your fork uses a different owner or name.

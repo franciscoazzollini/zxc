@@ -1,4 +1,4 @@
-# Test And Validation Matrix
+# Testing and validation matrix
 
 This project uses a validation matrix that explicitly covers:
 

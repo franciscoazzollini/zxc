@@ -30,3 +30,7 @@ Thumbs.db
 # Local benchmark output
 benchmark_results/
 *.log
+
+# Editor / backup
+*.bak
+*.bak-*

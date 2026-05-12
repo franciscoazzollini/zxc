@@ -1,0 +1,9 @@
+OmniComp
+Copyright (c) OmniComp contributors — licensed under the MIT License (see LICENSE).
+
+Third-party components linked at runtime
+--------------------------------------
+This software uses the Zstandard (zstd) compression library from Meta:
+  https://github.com/facebook/zstd
+
+Refer to the zstd distribution for its license terms (BSD / GPLv2 dual license).
