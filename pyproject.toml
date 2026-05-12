@@ -26,6 +26,9 @@ classifiers = [
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 
+[project.scripts]
+zxc = "omnicomp.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/omnicomp/omnicomp"
 Repository = "https://github.com/omnicomp/omnicomp"
