@@ -30,7 +30,9 @@ def _load_library() -> ctypes.CDLL:
             return ctypes.CDLL(str(path))
     raise RuntimeError(
         "Could not find libomnicomp_pipeline.{so,dylib} next to "
-        f"{__file__}. Build it with `make` or:\n"
+        f"{__file__}. From the repo root run `make` (bundled zstd via "
+        "`third_party/zstd` if the submodule is present, otherwise system "
+        "`-lzstd`). Manual example:\n"
         "  cc -O3 -march=native -ffast-math -fPIC -shared -pthread \\\n"
         "     omnicomp/pipeline.c -lzstd -lm -o omnicomp/libomnicomp_pipeline.so"
     )

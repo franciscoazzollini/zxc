@@ -22,7 +22,7 @@ memory safety, integrity of decompressed output).
 
 ## Scope
 
-OmniComp links **libzstd** and uses native code; reports about vulnerabilities
-**inside upstream zstd** should follow [facebook/zstd](https://github.com/facebook/zstd)
+OmniComp embeds or links **Zstandard (zstd)** and uses native code; reports
+about vulnerabilities **inside upstream zstd** should follow [facebook/zstd](https://github.com/facebook/zstd)
 disclosure practices after confirming the issue is not specific to OmniComp’s
 glue code.

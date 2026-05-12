@@ -1,9 +1,15 @@
 OmniComp
 Copyright (c) OmniComp contributors — licensed under the MIT License (see LICENSE).
 
-Third-party components linked at runtime
---------------------------------------
-This software uses the Zstandard (zstd) compression library from Meta:
+Third-party components (Zstandard / zstd)
+----------------------------------------
+OmniComp’s C pipeline calls the Zstandard API. By default the build compiles
+zstd from Meta’s sources (vendored under ``third_party/zstd`` as a git
+submodule) and links ``libzstd.a`` into ``libomnicomp_pipeline``, so the
+resulting shared library does not depend on a separate ``libzstd`` at
+runtime. You can instead link against the system libzstd; see the Makefile.
+
+Upstream project and license:
   https://github.com/facebook/zstd
 
 Refer to the zstd distribution for its license terms (BSD / GPLv2 dual license).

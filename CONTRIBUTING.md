@@ -7,14 +7,17 @@ area—please keep changes focused.
 ## Prerequisites
 
 - C compiler (`cc` / `clang` / `gcc`) with POSIX threads
-- **libzstd** (headers + shared library), e.g. `libzstd-dev` on Debian/Ubuntu,
-  or Homebrew `zstd` on macOS
+- **Zstandard**: either initialize the bundled sources and let `make` build
+  them into the pipeline library (no separate libzstd install), **or** install
+  system libzstd (e.g. `libzstd-dev` on Debian/Ubuntu, Homebrew `zstd` on macOS)
+  and build with `USE_BUNDLED_ZSTD=0` if `third_party/zstd` is absent.
 - Python **3.8+**
 - **pytest** (for the test suite)
 
 ## Build and test
 
 ```bash
+git submodule update --init --recursive   # once: fetches third_party/zstd
 make              # builds omnicomp/libomnicomp_pipeline.{so,dylib}
 make test         # pytest on tests/
 # or

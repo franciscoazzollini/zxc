@@ -10,9 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install libzstd
-        run: sudo apt-get update && sudo apt-get install -y libzstd-dev
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:

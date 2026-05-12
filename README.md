@@ -15,7 +15,9 @@ layer only assembles the self-describing container.
   plus a per-niche synthetic test suite.
 - **Frontier-class trade-offs** — multiple operating points dominate or
   approach zstd at the same numeric level: e.g. `level=12` reaches **zstd-15-class ratio at ~4.8× the compression speed**; `level=22` cuts compression wall time versus **zstd -22** while staying in the same ratio tier; many corpus rows show **multiplicative decompress throughput gains** versus zstd once decode parity is enforced (see **Publication-grade benchmarks** below—large percentage deltas map to throughput ratios, not hidden CPU scaling).
-- **MIT licensed**, depends only on libzstd and libpthread.
+- **MIT licensed**; the C pipeline uses **Zstandard** (compiled in from
+  `third_party/zstd` by default, or linked as **libzstd**) plus **libpthread**.
+  Zstd remains dual-licensed upstream (BSD / GPLv2); see `NOTICE`.
 
 ## Conclusions
 
@@ -266,26 +268,35 @@ aggregate gains to NEON alone.
 
 ## Build & install
 
-OmniComp depends on **libzstd** and **libpthread**.
+The native library needs **libpthread**. **Zstd** is supplied either by the
+**`third_party/zstd` git submodule** (default: `make` builds `libzstd.a` and
+links it in—no runtime `libzstd`) or by the system linker (`-lzstd`).
 
-### macOS
+### Recommended (bundled zstd)
+
+```bash
+git submodule update --init --recursive
+make
+```
+
+### macOS without the submodule
 
 ```bash
 brew install zstd
 make
 ```
 
-### Debian / Ubuntu
+### Debian / Ubuntu without the submodule
 
 ```bash
 sudo apt-get install -y libzstd-dev
 make
 ```
 
-### From source
+### System libzstd with explicit paths
 
 ```bash
-make ZSTD_INCLUDE=/path/to/zstd/lib ZSTD_LIB=/path/to/zstd/lib
+make USE_BUNDLED_ZSTD=0 ZSTD_INCLUDE=/path/to/zstd/lib ZSTD_LIB=/path/to/zstd/lib
 ```
 
 The shared library lands at `omnicomp/libomnicomp_pipeline.{so,dylib}`.
