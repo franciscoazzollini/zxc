@@ -618,8 +618,8 @@ static void *worker_pipeline(void *arg) {
      * that the user can dial from "fast" to "strong":
      *
      *   user level | comp_level | codec_internal | cascade_level | cascade
-     *  ------------+------------+----------------+---------------+--------
-     *      1       |     1      |       1        |       -       | NEVER
+     *  ------------+------------+----------------+---------------+-----------
+     *      1       |     1      |       1        |       1       | smart
      *      3 (def) |     3      |       1        |       3       | smart
      *      6       |     6      |       2        |       6       | always
      *     >=9      |   user     |       3        |     user      | always
@@ -631,15 +631,13 @@ static void *worker_pipeline(void *arg) {
      * "cascade_level" is the level used for the safety-net plain-zstd
      * comparison (only when the cascade runs).
      *
-     * Fast mode (level 1) skips the cascade entirely: the detector +
-     * codec must be trusted. Hardened detector + flavour-byte codecs
-     * make this safe in practice (round-trip is always correct; the
-     * worst case is a moderately worse ratio on misclassified blocks). */
+     * Level 1 uses the same smart cascade as level 2–3 so misclassified
+     * specialised blocks can fall back to zstd-1 (cheap baseline). */
     int user_level = job->zstd_level;
     int comp_level = user_level;
     int codec_internal_level;
     int cascade_level = user_level;
-    int cascade_policy;  /* 0=never, 1=smart, 2=always */
+    int cascade_policy;  /* 1=smart, 2=always */
     if (user_level <= 1) {
         /* Fast: still cascade against zstd-1, but avoid codec output
          * regressions (cheap because zstd-1 is ~800 MB/s anyway).
@@ -693,26 +691,33 @@ static void *worker_pipeline(void *arg) {
 
     /* 4. COMPETITIVE CASCADE.
      *
-     * Decision matrix:
-     *   - cascade_policy == 0 (fast mode): never run cascade
+     * Decision matrix (see cascade_policy assignments above; there is no
+     * longer a "never cascade" mode—level 1 still uses smart cascade):
      *   - cascade_policy == 1 (smart): run for shuffle, run for predictor
-     *     unless it clearly won (< 0.4 ratio), run for random, run when
-     *     codec barely compressed (> 0.9 ratio)
+     *     unless it clearly won (< ~0.3 ratio), run for random, run when
+     *     codec barely compressed (> ~0.88 ratio)
      *   - cascade_policy == 2 (always): run for every specialised codec
      *     and for random; skip only for text/structured/generic */
-    int pred_clearly_won = is_pred_shuffle && (written * 5 < job->block_len * 2);
+    /* Require a stronger win (< ~30% of raw size) before skipping the
+     * competitive baseline for predictor codecs under smart cascade. */
+    int pred_clearly_won = is_pred_shuffle && (written * 10 < job->block_len * 3);
     int run_baseline = 0;
+    /* "Barely compressed" trigger: compare to plain zstd when the specialised
+     * output still exceeds ~88% of the raw block (was 90%). Empirically this
+     * recovers a few tenths of a percent of ratio on mixed corpora without
+     * changing the decompressor—only which payload is stored per block. */
+    int specialised_weak = (written * 100 > job->block_len * 88);
     if (cascade_policy == 1) {
         run_baseline =
             (detected == NICHE_RANDOM) ||
             is_byte_shuffle ||
             (is_pred_shuffle && !pred_clearly_won) ||
-            (written * 100 > job->block_len * 90);
+            specialised_weak;
     } else if (cascade_policy == 2) {
         run_baseline =
             specialised_codec ||
             (detected == NICHE_RANDOM) ||
-            (written * 100 > job->block_len * 90);
+            specialised_weak;
     }
 
     if (run_baseline) {

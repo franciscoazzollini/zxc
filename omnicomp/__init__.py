@@ -7,7 +7,8 @@ Public API:
 The ``level`` knob (1..22, default 3) controls the speed/ratio trade-off.
 It is mapped to a per-block strategy inside the C pipeline:
 
-    level <= 1   - "fast"   : no cascade, zstd-1 everywhere
+    level <= 1   - "fast"   : smart cascade, zstd-1 inside specialised codecs,
+                     cascade compares at zstd-1
     level <= 3   - default  : smart cascade, zstd-1 inside specialised codecs
     level <= 6   - balanced : always cascade, codec internal zstd-2
     level >= 7   - "strong" : always cascade, codec internal zstd-3,
