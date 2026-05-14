@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Append benchmark section to docs/paper.docx and create docs/publication.docx (stdlib only)."""
+"""Append benchmark section to docs/paper.docx.
+
+Regenerates ``docs/publication.docx`` via ``scripts/build_publication_docx.py``
+(requires the ``python-docx`` package; use ``uv run --with python-docx`` if needed).
+"""
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -100,75 +107,16 @@ def patch_paper() -> None:
 
 
 def write_publication() -> None:
-    paper = ROOT / "docs" / "paper.docx"
-    pub = ROOT / "docs" / "publication.docx"
-    # Base OOXML shell always comes from paper.docx (styles, rels, fonts).
-    tree, body, sect = _load_document_xml(paper)
-    root = tree.getroot()
-
-    article = [
-        ("OmniComp pushes the lossless compression Pareto frontier", True),
-        ("MIT-licensed codec matches or beats zstd on decode speed across heterogeneous data", False),
-        ("", False),
-        (
-            "A small open-source team today outlined results for OmniComp, a "
-            "lossless compressor that routes each block through specialised "
-            "codecs—numeric predictors, byte shuffles, run-length helpers—and "
-            "falls back to zstd when a niche under-performs. The entire hot path "
-            "runs in C; Python only assembles a self-describing container.",
-            False,
-        ),
-        (
-            "On the standard 211 MB Silesia corpus, reproducible benchmarks now "
-            "enforce single-threaded decode parity against zstd when reporting "
-            "single-core headline figures. Under these controls, OmniComp "
-            "frequently delivers substantially higher decompress throughput than "
-            "plain zstd at the same numerical level, while remaining within a "
-            "few percent on compression ratio—effectively extending the practical "
-            "trade-off curve developers already associate with zstd's level ladder.",
-            False,
-        ),
-        (
-            "Independent streams per corpus file are compressed and timed in "
-            "isolated processes; CSV outputs document thread counts and whether "
-            "OmniComp's internal block-level parallelism was disabled for a fair "
-            "comparison. Where throughput ratios reach three times zstd's MB/s, "
-            "the accompanying percentage delta reads near +200%—a consequence of "
-            "relative speed measurements, not hidden multicore inflation.",
-            False,
-        ),
-        (
-            "Maintainers position OmniComp as a candidate \"next tier\" after zstd "
-            "for workloads that repeatedly decompress cold storage—scientific "
-            "arrays, logs with structured pockets, or mixed archives—without "
-            "surrendering ecosystem familiarity: compressed payloads remain framed "
-            "by zstd-compatible inner frames wherever the generic niche wins.",
-            False,
-        ),
-        (
-            "Artifacts (validation matrices, Silesia CSVs, and pytest-backed "
-            "round-trip suites) ship in the repository; sceptics can rebuild the "
-            "shared library and replay benchmarks on identical inputs.",
-            False,
-        ),
-        (
-            "Status: research-grade software with an explicit reproducibility trail; "
-            "production deployments remain the responsibility of integrators who "
-            "profile their own data mixes.",
-            False,
-        ),
-    ]
-
-    for child in list(body):
-        body.remove(child)
-    for txt, bold in article:
-        if txt == "":
-            body.append(ET.Element(W + "p"))
-        else:
-            body.append(_p(txt, bold=bold))
-    body.append(sect)
-
-    _write_docx(paper, pub, root)
+    """Rebuild ``docs/publication.docx`` (Spanish Medium-style article)."""
+    script = ROOT / "scripts" / "build_publication_docx.py"
+    if shutil.which("uv"):
+        subprocess.run(
+            ["uv", "run", "--with", "python-docx", "python", str(script)],
+            cwd=ROOT,
+            check=True,
+        )
+    else:
+        subprocess.run([sys.executable, str(script)], cwd=ROOT, check=True)
 
 
 def main() -> None:

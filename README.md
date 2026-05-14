@@ -57,7 +57,7 @@ Committed Silesia CSVs (`docs/silesia_per_file.csv`, `docs/silesia_vs_zstd_metri
 | `decomp_mb_s_ratio_omni_over_zstd` | Omni decompress MB/s ÷ zstd decompress MB/s (e.g. **3.0** ≈ triple zstd throughput) |
 | `decomp_delta_pct_omni_vs_zstd` | `(omni_mb_s / zstd_mb_s − 1) × 100` — so **+200 %** corresponds to **~3×** throughput, not “extra cores” |
 
-For a press-style narrative in English, see **`docs/publication.docx`**. The technical manuscript **`docs/paper.docx`** includes an addendum on benchmark integrity (single-thread decode parity).
+For a Medium-style outreach draft in Spanish (regenerate with ``scripts/build_publication_docx.py``), see **`docs/publication.docx`**. The technical manuscript **`docs/paper.docx`** includes an addendum on benchmark integrity (single-thread decode parity).
 
 ## Headline result — Silesia (202 MB), single thread
 
@@ -413,7 +413,7 @@ zstd" without depending on the dispatcher's choice.
 │       └── ci.yml               # GitHub Actions: build + pytest
 └── docs/
     ├── paper.docx               # research paper (English + benchmark addendum)
-    ├── publication.docx         # news-style breakthrough summary (English)
+    ├── publication.docx         # Medium-style outreach draft (Spanish); see scripts/build_publication_docx.py
     ├── TESTING.md               # release gate and validation workflow
     ├── validation_report.md     # latest validation matrix report
     ├── validation_report.csv    # machine-readable matrix report
