@@ -2,6 +2,12 @@
 
 *MIT-licensed, block-adaptive compression: often faster decode than zstd at the same level, within a few percent on ratio—reproducible on Silesia.*
 
+---
+**Poner una imagen de (banner / portada Medium):** caja de software retro tipo WinRAR/WinZip años 90–2000, pero modernizada: libros y carpetas apretándose en un bloque compacto, logo “OmniComp” o “zxc”, sensación de compresión sin pérdidas y velocidad.
+
+**Prompt sugerido (IA / diseñador):** Medium article hero banner 16:9, nostalgic late-90s shareware box art meets clean 2024 editorial design, stylized stack of colorful file folders and hardcover books being squeezed into a glowing compressed archive cube with a subtle zipper or clamp motif, bold product name “OmniComp” in chunky retro software typography, tagline area left subtle, teal and amber accents on dark navy background, slight gloss and depth like classic WinRAR WinZip splash screens but not copying any real brand logos, flat-meets-3D illustration, high contrast readable at thumbnail size, no tiny illegible text, professional tech blog cover not photorealistic clutter.
+---
+
 Cold storage is cheap. **Reading it back is not.**
 
 Every analytics pipeline, backup restore, and edge cache miss pays the same tax: decompress bytes before you can use them. For a decade, teams reached for **Zstandard (zstd)**—fast, predictable, battle-tested. You pick a level from 1 to 22, trade ratio for CPU, ship. That mental model works so well it became infrastructure folklore.
@@ -45,23 +51,25 @@ Each niche maps to a concrete path: plain zstd for text and generic content; byt
 **3. Cascade.**  
 For many specialized paths, the pipeline also runs plain zstd on the **same original block** and compares sizes. Smaller wins. Often that means zstd generic—exactly the safe outcome you want when the detector is uncertain.
 
-The user-facing **`level` knob (1…22)** still feels like zstd’s ladder. Under the hood it adjusts which zstd levels run in generic niches, which levels run inside specialized codecs, and how aggressively the cascade compares candidates—one dial, multiple internal strategies.
+The user-facing `level` **knob (1…22)** still feels like zstd’s ladder. Under the hood it adjusts which zstd levels run in generic niches, which levels run inside specialized codecs, and how aggressively the cascade compares candidates—one dial, multiple internal strategies.
 
 ---
+
 **Poner una imagen de:** un diagrama de flujo limpio: archivo → bloques → detector de nicho → códec especializado → cascada vs zstd → contenedor OMN8.
 
-**Prompt sugerido (IA / diseñador):** Minimal technical editorial illustration, dark slate background, soft teal and amber accents, horizontal flowchart: raw file splits into blocks → niche detector (text / numeric / shuffle) → specialized codec path → competitive cascade comparing size with plain zstd → OMN8 container output, flat vector style, no photorealism, no tiny unreadable labels, 16:9, suitable for Medium hero section.
----
+## **Prompt sugerido (IA / diseñador):** Minimal technical editorial illustration, dark slate background, soft teal and amber accents, horizontal flowchart: raw file splits into blocks → niche detector (text / numeric / shuffle) → specialized codec path → competitive cascade comparing size with plain zstd → OMN8 container output, flat vector style, no photorealism, no tiny unreadable labels, 16:9, suitable for Medium hero section.
 
 > If the specialized path does not beat plain zstd on the same bytes, we keep zstd. The system is conservative by design.
+
+
 
 ## Why you should trust these benchmarks
 
 Adaptive compressors invite skepticism—and should. A multithreaded block decoder can look faster than single-threaded libzstd even when the algorithm is not better, simply because more cores touched the work.
 
-Our committed Silesia CSVs (`docs/silesia_vs_zstd_metrics.csv`, `docs/silesia_per_file.csv`) record **`n_threads`**, and when **`omni_seq_block_decode = 1`**, OmniComp’s OMN8 decoder ran **without** internal pthread parallelism between blocks—matching single-threaded libzstd decompress for fair headline comparisons.
+Our committed Silesia CSVs (`docs/silesia_vs_zstd_metrics.csv`, `docs/silesia_per_file.csv`) record `n_threads`, and when `omni_seq_block_decode = 1`, OmniComp’s OMN8 decoder ran **without** internal pthread parallelism between blocks—matching single-threaded libzstd decompress for fair headline comparisons.
 
-They also publish **`decomp_mb_s_ratio_omni_over_zstd`** (Omni throughput ÷ zstd throughput). When that ratio is **3.0**, the percentage column reads about **+200%**—that is how relative speed is defined, not hidden multicore inflation.
+They also publish `decomp_mb_s_ratio_omni_over_zstd` (Omni throughput ÷ zstd throughput). When that ratio is **3.0**, the percentage column reads about **+200%**—that is how relative speed is defined, not hidden multicore inflation.
 
 **Measurement context:** Apple Silicon (M-series), zstd **1.5.6**, OmniComp built with `cc -O3 -march=native`, **best of 3** runs via `examples/benchmark_silesia.py`. Ratio uses the zstd convention (**original ÷ compressed**; higher is better). Corpus: the standard [Silesia](https://sun.aei.polsl.pl/~sdeor/index.php?page=silesia) set (~202 MB aggregated blob).
 
@@ -73,31 +81,37 @@ Benchmarks compress each Silesia file as an independent stream, time compress an
 
 On the full heterogeneous blob, OmniComp usually stays within a few percent of zstd’s ratio at the **same numeric level**, while often delivering higher decompress throughput. Three operating points tell the story:
 
-| Level | zstd ratio | OmniComp ratio | zstd decomp MB/s | OmniComp decomp MB/s | Takeaway |
-|------:|-----------:|---------------:|-----------------:|---------------------:|----------|
-| 9 | 3.588 | 3.541 | 1 843 | **2 166** | ~zstd -9 ratio, **~+18% decode** |
-| 12 | 3.727* | 3.603 | 2 022* | **2 248** | zstd-**15-class** ratio at **~4.8×** zstd -15 compress speed |
-| 22 | 4.054 | 3.927 | 1 767 | **1 919** | Near zstd -22 ratio, **~47% less** compress wall time |
 
-\*At level 12, compare OmniComp L12 to zstd **-15** (the ratio tier it tracks); zstd -15 ratio 3.727 vs OmniComp 3.603 (~3% behind), zstd -15 compress ~13 MB/s vs OmniComp ~64 MB/s.
+| Level | zstd ratio | OmniComp ratio | zstd decomp MB/s | OmniComp decomp MB/s | Takeaway                                                     |
+| ----- | ---------- | -------------- | ---------------- | -------------------- | ------------------------------------------------------------ |
+| 9     | 3.588      | 3.541          | 1 843            | **2 166**            | ~zstd -9 ratio, **~+18% decode**                             |
+| 12    | 3.727*     | 3.603          | 2 022*           | **2 248**            | zstd-**15-class** ratio at **~4.8×** zstd -15 compress speed |
+| 22    | 4.054      | 3.927          | 1 767            | **1 919**            | Near zstd -22 ratio, **~47% less** compress wall time        |
+
+
+At level 12, compare OmniComp L12 to zstd **-15** (the ratio tier it tracks); zstd -15 ratio 3.727 vs OmniComp 3.603 (~3% behind), zstd -15 compress ~13 MB/s vs OmniComp ~64 MB/s.
 
 Across levels 1…22 on this corpus, OmniComp is typically within **~1–3%** of zstd ratio while decompressing faster on many rows; peak decode wins in committed per-file data reach about **+39%** vs zstd at the same level.
 
 ---
+
 **Poner una imagen de:** gráfico editorial ratio vs velocidad de descompresión: OmniComp L9/L12/L22 frente a zstd al mismo nivel, mostrando mejor decode sin sacrificar ratio.
 
-**Prompt sugerido (IA / diseñador):** Clean data visualization for a tech blog, scatter or grouped bar chart, x-axis compression ratio, y-axis decompress MB/s, two series zstd vs OmniComp at levels 9 12 22, muted professional palette white background, large readable axis titles, editorial infographic not 3D, 16:9, no logo watermark. Annotate three callouts: L9 similar ratio faster decode, L12 zstd-15-class ratio, L22 near-max ratio faster compress wall time.
----
+## **Prompt sugerido (IA / diseñador):** Clean data visualization for a tech blog, scatter or grouped bar chart, x-axis compression ratio, y-axis decompress MB/s, two series zstd vs OmniComp at levels 9 12 22, muted professional palette white background, large readable axis titles, editorial infographic not 3D, 16:9, no logo watermark. Annotate three callouts: L9 similar ratio faster decode, L12 zstd-15-class ratio, L22 near-max ratio faster compress wall time.
+
+
 
 ## Case study: when structure is obvious (`x-ray`)
 
-Benchmark aggregates hide wins. The Silesia **`x-ray`** file (16-bit medical imaging, ~8 MB) is stride-structured numeric data—the shape OmniComp was designed for.
+Benchmark aggregates hide wins. The Silesia `x-ray` file (16-bit medical imaging, ~8 MB) is stride-structured numeric data—the shape OmniComp was designed for.
 
-| Algorithm | Ratio | Decomp MB/s |
-|-----------|------:|------------:|
-| zstd -3 | 1.39 | 1 053 |
-| zstd -9 | 1.58 | 990 |
-| **OmniComp L3** | **1.74** | **1 902** |
+
+| Algorithm       | Ratio    | Decomp MB/s |
+| --------------- | -------- | ----------- |
+| zstd -3         | 1.39     | 1 053       |
+| zstd -9         | 1.58     | 990         |
+| **OmniComp L3** | **1.74** | **1 902**   |
+
 
 OmniComp selects **byte-shuffle 8**, splitting the stream into eight sub-bands that zstd compresses far more effectively. Ratio improves **~25% vs zstd -3**; decode improves **~80%** because de-shuffle is essentially a memcpy-class inverse—not another heavy entropy pass.
 
@@ -147,4 +161,4 @@ The final verdict is not this article. Clone the repo, rerun the benchmarks, and
 
 ---
 
-*OmniComp v0.9 · MIT License · Benchmark artifacts: `docs/silesia_vs_zstd_metrics.csv`, `docs/silesia_per_file.csv`*
+*OmniComp v0.9 · MIT License · Benchmark artifacts:* `docs/silesia_vs_zstd_metrics.csv`*,* `docs/silesia_per_file.csv`
